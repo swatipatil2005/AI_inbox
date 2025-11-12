@@ -22,7 +22,7 @@ SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 #
 # (1) This is the key you got from Google AI Studio
 # (1) This key will be read from Render's Environment Variables
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+GEMINI_API_KEY = 'AIzaSyChymKBe5M1PxUa9mvvRGH2JvIS1PztuYw' 
 try:
     genai.configure(api_key=GEMINI_API_KEY)
     # (2) This is the model name we found with check_models.py
