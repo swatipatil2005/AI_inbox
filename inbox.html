@@ -1,0 +1,531 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  Inbox, 
+  AlertCircle, 
+  Star, 
+  CalendarClock, 
+  Mail, 
+  ChevronLeft, 
+  Loader2,
+  ServerCrash,
+  LogIn
+} from 'lucide-react';
+
+// --- Mock Email Data ---
+// This remains our "source of truth" that we pretend to fetch from Gmail
+const mockEmails = [
+  {
+    id: '1',
+    sender: 'HR Department',
+    subject: 'Action Required: Complete Your 2025 Benefits Enrollment',
+    body: 'Dear Employee,\n\nThis is a friendly reminder that the open enrollment period for 2025 benefits ends this Friday, November 14th at 5:00 PM. Please log in to the employee portal to make your selections before the deadline.\n\nIf you do not take action, your current benefits will roll over, but you will miss the opportunity to enroll in new plans like the supplemental vision coverage.\n\nThank you,\nHR Team',
+  },
+  {
+    id: '2',
+    sender: 'Project Manager (Alice)',
+    subject: 'URGENT: Client-Reported Bug in Production',
+    body: 'Team,\n\nWe have a critical issue. The client just called and their main dashboard is not loading. This is a showstopper for their quarterly review tomorrow.\n\nAll hands on deck. We need to identify the root cause and deploy a hotfix ASAP. Please join the emergency stand-up in 5 minutes.\n\nLink: zoom.us/emergency-meeting\n\n- Alice',
+  },
+  {
+    id: '3',
+    sender: 'Tech Weekly Newsletter',
+    subject: 'The Future of AI in Software Development',
+    body: 'Hi reader,\n\nThis week, we dive deep into the latest advancements in generative AI and their impact on the developer workflow. From new code completion tools to automated testing suites, how is AI changing the game?\n\nAlso in this issue:\n- Top 10 CSS frameworks for 2026\n- A look back at the rise of serverless\n- Why quantum computing might be closer than you think\n\nHappy reading!',
+  },
+  {
+    id: '4',
+    sender: 'Jane Doe',
+    subject: 'Quick Question about Q4 Marketing Report',
+    body: 'Hi there,\n\nHope you are having a good week. I was just reviewing the Q4 marketing report draft and had a quick question about the "Customer Acquisition Cost" slide. The numbers seem a bit lower than our estimates from last quarter. \n\nCould you double-check the data source? No rush, just want to make sure we are aligned before the big presentation.\n\nBest,\nJane',
+  },
+  {
+    id: '5',
+    sender: 'IT Services',
+    subject: 'Scheduled Maintenance: Server Downtime Tonight',
+    body: 'This is an automated notification. Our engineering team will be performing scheduled maintenance on the main database servers tonight, November 9th, from 11:00 PM to 1:00 AM IST.\n\nDuring this window, internal tools and services may be intermittently unavailable. We apologize for any inconvenience.\n\n- Your IT Team',
+  },
+  {
+    id: '6',
+    sender: 'CEO (Mark Thompson)',
+    subject: 'Company All-Hands: Vision for 2026',
+    body: 'Team,\n\nI\'m excited to invite you to our annual all-hands meeting next Monday at 10:00 AM. I will be sharing our strategic vision for the next two years, including our expansion plans, new product verticals, and our commitment to sustainability.\n\nThis is an important meeting for all of us, and I look forward to sharing this journey with you.\n\nPlease RSVP via the calendar invite.\n\nBest,\nMark',
+  },
+];
+
+// --- API Configuration ---
+const API_KEY = ""; // Leave as-is, Canvas will provide the key
+const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${API_KEY}`;
+
+// --- AI Schema Definition ---
+const aiResponseSchema = {
+  type: "ARRAY",
+  items: {
+    type: "OBJECT",
+    properties: {
+      id: { type: "STRING" },
+      summary: { type: "STRING" },
+      category: { 
+        type: "STRING",
+        enum: ["Urgent", "Important", "Deadline", "General"]
+      },
+      priority: {
+        type: "STRING",
+        enum: ["High", "Medium", "Low"]
+      }
+    },
+    required: ["id", "summary", "category", "priority"]
+  }
+};
+
+// --- SIMULATED BACKEND FUNCTION ---
+/**
+ * This function simulates the entire backend process:
+ * 1. (Simulated) Fetching emails from Gmail API.
+ * 2. Calling the Gemini API to process and categorize them.
+ * 3. Returning the processed emails.
+ */
+async function fetchAndProcessEmails() {
+  // In a real app, you would first fetch raw emails from the Gmail API.
+  // For this simulation, we'll just use our mock data.
+  const rawEmails = mockEmails;
+
+  const systemPrompt = `You are an AI email assistant. Analyze the following list of emails.
+  For EACH email, provide a concise one-sentence summary, a category, and a priority.
+  - 'category' must be one of: "Urgent", "Important", "Deadline", or "General".
+  - 'priority' must be one of: "High", "Medium", "Low".
+  - "Deadline" category is for emails with a specific due date.
+  - "Urgent" category is for immediate, high-impact issues.
+  - "Important" is for non-urgent but high-value items (like from the CEO).
+  - "General" is for newsletters, FYIs, etc.
+  Respond ONLY with the JSON array matching the provided schema.`;
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          { text: systemPrompt },
+          { text: `Email data: ${JSON.stringify(rawEmails)}` }
+        ]
+      }
+    ],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: aiResponseSchema,
+    },
+  };
+
+  // This is the real API call to Gemini
+  let attempts = 0;
+  let response;
+  while (attempts < 3) { // Exponential backoff retry
+    response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) break;
+
+    attempts++;
+    await new Promise(res => setTimeout(res, 1000 * Math.pow(2, attempts)));
+  }
+  
+  if (!response.ok) {
+    throw new Error(`API request failed with status ${response.status}`);
+  }
+
+  const result = await response.json();
+  
+  if (!result.candidates?.[0]?.content?.parts?.[0]?.text) {
+    console.error("Invalid API response structure:", result);
+    throw new Error("Failed to get valid content from AI. The response format was unexpected.");
+  }
+
+  const aiData = JSON.parse(result.candidates[0].content.parts[0].text);
+
+  // Merge AI data with original mock data
+  const enhancedEmails = rawEmails.map(email => {
+    const aiInfo = aiData.find(item => item.id === email.id);
+    return { ...email, ...aiInfo };
+  });
+
+  return enhancedEmails;
+}
+
+// --- React Components ---
+
+/**
+ * 1. Main App Component
+ * Manages state: logged-in status, emails, loading, etc.
+ */
+export default function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [emails, setEmails] = useState([]);
+  const [selectedEmailId, setSelectedEmailId] = useState(null);
+  const [activeTab, setActiveTab] = useState('All');
+  const [isLoading, setIsLoading] = useState(false); // Now used for login
+  const [error, setError] = useState(null);
+
+  // This function simulates the entire login + data fetching process
+  const handleSimulatedLogin = async () => {
+    setIsLoading(true);
+    setError(null);
+
+    // Simulate network delay for login and email fetching
+    await new Promise(res => setTimeout(res, 2500)); 
+
+    try {
+      // Call our "backend" function
+      const processedEmails = await fetchAndProcessEmails();
+      setEmails(processedEmails);
+      setIsLoggedIn(true);
+    } catch (e) {
+      console.error("Error processing emails:", e);
+      setError(`Failed to process emails. ${e.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // --- Memoized values (no changes from previous version) ---
+  const selectedEmail = useMemo(
+    () => emails.find(e => e.id === selectedEmailId),
+    [emails, selectedEmailId]
+  );
+
+  const filteredEmails = useMemo(
+    () => {
+      if (activeTab === 'All') return emails;
+      return emails.filter(e => e.category === activeTab);
+    },
+    [emails, activeTab]
+  );
+  
+  const categoryCounts = useMemo(() => {
+    return emails.reduce((acc, email) => {
+      if (email.category) {
+        acc[email.category] = (acc[email.category] || 0) + 1;
+      }
+      return acc;
+    }, { All: emails.length });
+  }, [emails]);
+
+  // --- Render Logic ---
+
+  if (!isLoggedIn) {
+    return (
+      <LoginPage 
+        onLogin={handleSimulatedLogin} 
+        isLoading={isLoading} 
+        error={error} 
+      />
+    );
+  }
+
+  // This is the main inbox UI from the previous version
+  return (
+    <div className="flex flex-col h-screen w-full bg-gray-100 font-inter text-gray-900 antialiased">
+      {/* Header */}
+      <header className="flex items-center justify-between p-4 bg-white border-b border-gray-200">
+        <div className="flex items-center space-x-3">
+          <Mail className="w-6 h-6 text-blue-600" />
+          <h1 className="text-xl font-bold text-gray-800">AI Inbox</h1>
+        </div>
+        <button 
+          onClick={() => {
+            // Simulate logout
+            setIsLoggedIn(false);
+            setEmails([]);
+            setError(null);
+          }}
+          className="text-sm font-medium text-gray-600 hover:text-blue-600"
+        >
+          Log Out
+        </button>
+      </header>
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col min-h-0">
+        {/* AI Category Tabs */}
+        <EmailTabs 
+          activeTab={activeTab} 
+          setActiveTab={setActiveTab}
+          counts={categoryCounts}
+          onSelectTab={() => setSelectedEmailId(null)}
+        />
+        
+        <div className="flex-1 grid grid-cols-1 md:grid-cols-12 min-h-0">
+          <div className={`
+            ${selectedEmailId ? 'hidden md:flex' : 'flex'}
+            flex-col md:col-span-4 lg:col-span-3
+            bg-white border-r border-gray-200 overflow-y-auto
+          `}>
+            <EmailList
+              emails={filteredEmails}
+              selectedEmailId={selectedEmailId}
+              onSelectEmail={setSelectedEmailId}
+            />
+          </div>
+          
+          <div className={`
+            ${selectedEmailId ? 'flex' : 'hidden md:flex'}
+            flex-col md:col-span-8 lg:col-span-9 bg-gray-50
+          `}>
+            <EmailDetail
+              email={selectedEmail}
+              onBack={() => setSelectedEmailId(null)}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 2. Login Page Component (NEW)
+ */
+function LoginPage({ onLogin, isLoading, error }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-screen w-full bg-gray-100">
+      <div className="p-8 bg-white rounded-2xl shadow-xl flex flex-col items-center w-full max-w-sm">
+        <div className="flex items-center space-x-2 mb-6">
+          <Mail className="w-8 h-8 text-blue-600" />
+          <h1 className="text-2xl font-bold text-gray-800">AI Inbox</h1>
+        </div>
+        <p className="text-gray-600 text-center mb-8">
+          Log in to let your AI assistant categorize and summarize your emails.
+        </p>
+
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center h-24">
+            <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
+            <p className="mt-4 text-sm font-medium text-gray-600">
+              Connecting & analyzing inbox...
+            </p>
+          </div>
+        ) : (
+          <button
+            onClick={onLogin}
+            className="w-full flex items-center justify-center px-4 py-3 bg-blue-600 text-white rounded-lg font-medium shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all duration-200"
+          >
+            <svg className="w-5 h-5 mr-3" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+              <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l8.1 6.25C12.43 13.72 17.74 9.5 24 9.5z"></path>
+              <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
+              <path fill="#FBBC05" d="M10.66 28.76c-.53-1.62-.8-3.34-.8-5.12s.27-3.5.8-5.12l-8.1-6.25C1.04 15.3 0 19.48 0 24c0 4.52 1.04 8.7 2.56 12.44l8.1-6.68z"></path>
+              <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.2-13.47-9.91l-8.1 6.25C6.51 42.62 14.62 48 24 48z"></path>
+              <path fill="none" d="M0 0h48v48H0z"></path>
+            </svg>
+            Sign in with Google (Simulated)
+          </button>
+        )}
+
+        {error && (
+          <div className="mt-6 text-center text-red-600 bg-red-50 p-3 rounded-lg border border-red-200">
+            <p className="text-sm font-medium">Login Failed</p>
+            <p className="text-xs">{error}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 3. Error Message Component
+ */
+function ErrorMessage({ error }) {
+  // This is now primarily for errors *after* login.
+  // The login page handles its own errors.
+  return (
+    <div className="flex items-center justify-center h-full bg-red-50 p-4">
+      <div className="flex flex-col items-center space-y-4 p-8 bg-white rounded-lg shadow-xl border border-red-200">
+        <ServerCrash className="w-16 h-16 text-red-600" />
+        <h2 className="text-xl font-bold text-red-700">Something went wrong</h2>
+        <p className="text-gray-600 max-w-md text-center">{error}</p>
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-colors"
+        >
+          Try Again
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 4. AI Category Tabs Component
+ */
+function EmailTabs({ activeTab, setActiveTab, counts, onSelectTab }) {
+  const tabs = [
+    { name: 'All', icon: Inbox, category: 'All' },
+    { name: 'Urgent', icon: AlertCircle, category: 'Urgent', color: 'text-red-600' },
+    { name: 'Important', icon: Star, category: 'Important', color: 'text-yellow-500' },
+    { name: 'Deadline', icon: CalendarClock, category: 'Deadline', color: 'text-blue-600' },
+  ];
+
+  const handleTabClick = (category) => {
+    setActiveTab(category);
+    onSelectTab();
+  };
+
+  return (
+    <div className="p-2 bg-white border-b border-gray-200">
+      <nav className="flex space-x-1" aria-label="Tabs">
+        {tabs.map((tab) => {
+          const count = counts[tab.category] || 0;
+          const isActive = activeTab === tab.category;
+          return (
+            <button
+              key={tab.name}
+              onClick={() => handleTabClick(tab.category)}
+              className={`
+                ${isActive
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}
+                flex-1 md:flex-none px-3 py-2 font-medium text-sm rounded-lg
+                flex items-center justify-center space-x-2 transition-colors
+              `}
+            >
+              <tab.icon className={`w-5 h-5 ${isActive ? tab.color : ''}`} />
+              <span>{tab.name}</span>
+              {count > 0 && (
+                <span className={`
+                  ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}
+                  ml-2 px-2 py-0.5 rounded-full text-xs font-bold
+                `}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+    </div>
+  );
+}
+
+/**
+ * 5. Email List Component
+ */
+function EmailList({ emails, selectedEmailId, onSelectEmail }) {
+  if (emails.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-4">
+        <Inbox className="w-16 h-16 text-gray-300" />
+        <p className="mt-2 text-gray-500">No emails in this category.</p>
+      </div>
+    );
+  }
+
+  return (
+    <ul className="divide-y divide-gray-200">
+      {emails.map(email => (
+        <EmailListItem
+          key={email.id}
+          email={email}
+          isSelected={email.id === selectedEmailId}
+          onSelect={() => onSelectEmail(email.id)}
+        />
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * 6. Email List Item (Sub-component)
+ */
+function EmailListItem({ email, isSelected, onSelect }) {
+  return (
+    <li
+      onClick={onSelect}
+      className={`
+        p-4 cursor-pointer
+        ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}
+        transition-colors
+      `}
+    >
+      <div className="flex justify-between items-start mb-1">
+        <span className="text-sm font-semibold text-gray-800 truncate">
+          {email.sender}
+        </span>
+        <PriorityBadge priority={email.priority} />
+      </div>
+      <p className="text-sm font-medium text-gray-700 truncate">{email.subject}</p>
+      <p className="text-sm text-gray-500 truncate mt-1">{email.summary}</p>
+    </li>
+  );
+}
+
+/**
+ * 7. Priority Badge (Sub-component)
+ */
+function PriorityBadge({ priority }) {
+  const styles = {
+    High: 'bg-red-100 text-red-800',
+    Medium: 'bg-yellow-100 text-yellow-800',
+    Low: 'bg-green-100 text-green-800',
+  };
+  const style = styles[priority] || 'bg-gray-100 text-gray-800';
+  
+  return (
+    <span className={`
+      px-2 py-0.5 text-xs font-medium rounded-full
+      ${style}
+    `}>
+      {priority}
+    </span>
+  );
+}
+
+/**
+ * 8. Email Detail Component
+ */
+function EmailDetail({ email, onBack }) {
+  if (!email) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-4">
+        <Mail className="w-24 h-24 text-gray-300" />
+        <p className="mt-4 text-lg text-gray-500">Select an email to read</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0">
+      {/* Detail Header */}
+      <div className="p-4 bg-white border-b border-gray-200">
+        <div className="flex items-center mb-3">
+          <button
+            onClick={onBack}
+            className="md:hidden p-1 -ml-1 mr-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-full"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+          <h2 className="text-lg font-bold text-gray-800 truncate">{email.subject}</h2>
+        </div>
+        <div className="flex items-center space-x-2">
+          <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold text-sm">
+            {email.sender.charAt(0)}
+          </div>
+          <span className="text-sm font-medium text-gray-700">{email.sender}</span>
+        </div>
+      </div>
+
+      {/* Email Body */}
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <h3 className="text-sm font-bold text-blue-800 mb-2">AI Summary</h3>
+          <p className="text-sm text-blue-700 leading-relaxed">{email.summary}</p>
+        </div>
+        
+        <div className="bg-white rounded-lg border border-gray-200 p-6">
+          <p className="text-gray-700 whitespace-pre-wrap leading-relaxed">
+            {email.body}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}

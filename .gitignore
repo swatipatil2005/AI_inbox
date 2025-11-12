@@ -1,0 +1,8 @@
+# Google credentials
+client_secret.json
+
+# Python cache
+__pycache__/
+
+# Environment files
+.env
